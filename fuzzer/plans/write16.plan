@@ -1,0 +1,46 @@
+# write16.plan - sixteen lanes for test_write (ini_put* and deletions).
+#
+#   FUZZ_GROUP=write TC=test_write FUZZ_PLAN=write16 JOBS=16 FUZZ_CORE_OFFSET=16 ./fuzz run
+#
+# Approach
+#   test_write browses the input, then applies 1-6 seed-chosen operations
+#   (puts/putl/putbool/putf, delete key, delete section) through the
+#   temp-file + rename and in-place rewrite paths, and reads the result back.
+#   The seed drives far more of each exec than in test_read, so the plan leans
+#   on CMPLOG and on schedules that mutate the first 4 bytes often.
+#     - main, asan: sync hub and the classifying sanitizer
+#     - cmplogat, cmplog2: seed and section/key compares, two RedQueen levels
+#     - asan2: the rewrite path (cache_accum/cache_flush, LocalBuffer copies)
+#       is where a write overflow would be; a second ASAN lane on another
+#       schedule
+#     - msan: a full MSAN lane - the write path copies partially filled
+#       stack buffers around, which ASAN cannot see
+#     - long: FUZZ_MAX_LEN is global, but -P exploit + no trimming keeps long
+#       inputs alive; many long lines are what reach cache_flush()
+#     - lsan and laf: last, cut first (no allocation in minIni; byte compares)
+#     - the rest: one lane per power schedule / strategy, with SAND oracles
+#
+# FUZZ_ROUNDTRIP=1 (put/get oracle) is deliberately on no lane: it reports
+# duplicate-section files as crashes (see src/fuzz/main.c).
+#
+# Order matters when JOBS < 16: the first lanes are kept.
+# Line format and tokens: lib/run.sh. Every lane but main also gets -S <name> -z.
+#
+# name       | variant | afl-fuzz args                                                         | env
+
+main         | fast    | -x DICT -w ASAN_ORACLE -w MSAN_ORACLE                                 | AFL_FINAL_SYNC=1
+asan         | asan    | -P explore -x DICT -t TIMEOUT_SAN                                     |
+cmplogat     | fast    | -c CMPLOG -l 2AT -x DICT -a FMT -w ASAN_ORACLE                        | AFL_CMPLOG_ONLY_NEW=1
+cmplog2      | fast    | -c CMPLOG -l 2 -x DICT -w ASAN_ORACLE                                 | AFL_CMPLOG_ONLY_NEW=1
+asan2        | asan    | -p fast -P exploit -x DICT -a FMT -t TIMEOUT_SAN                      |
+msan         | msan    | -P explore -x DICT -t TIMEOUT_SAN                                     |
+explore      | fast    | -p explore -P explore -x DICT -a FMT -w ASAN_ORACLE -w MSAN_ORACLE    | AFL_DISABLE_TRIM=1
+exploit      | fast    | -p exploit -P exploit -Z -x DICT -a FMT -w ASAN_ORACLE                | AFL_DISABLE_TRIM=1
+long         | fast    | -p exploit -P exploit -x DICT -a FMT -w ASAN_ORACLE -w MSAN_ORACLE    | AFL_DISABLE_TRIM=1
+rare         | fast    | -p rare -x DICT -a FMT -w ASAN_ORACLE                                 |
+mopt         | fast    | -L 0 -p coe -x DICT -w ASAN_ORACLE -w MSAN_ORACLE                     |
+nodict       | fast    | -p fast -P explore -a FMT -w ASAN_ORACLE                              | AFL_DISABLE_TRIM=1
+quad         | fast    | -p quad -P exploit -x DICT -a FMT -w ASAN_ORACLE -w MSAN_ORACLE       | AFL_DISABLE_TRIM=1
+mmopt        | fast    | -p mmopt -x DICT -w ASAN_ORACLE -w MSAN_ORACLE                        |
+laf          | laf     | -x DICT -a FMT -w ASAN_ORACLE                                         |
+lsan         | lsan    | -P explore -x DICT -t TIMEOUT_SAN                                     |

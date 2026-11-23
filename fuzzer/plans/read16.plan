@@ -1,0 +1,45 @@
+# read16.plan - sixteen lanes for test_read (the minIni readers).
+#
+#   FUZZ_GROUP=read TC=test_read FUZZ_PLAN=read16 JOBS=16 ./fuzz run
+#
+# Approach
+#   test_read runs ini_browse, the ini_get* family, ini_has* and
+#   ini_getsection/getkey against the input file, with buffer sizes picked
+#   from the 4-byte seed (down to 1 byte, exactly sized heap buffers). Inputs
+#   are INI text, so every lane but nodict/seek takes -x DICT.
+#     - main, asan: sync hub and the classifying sanitizer; asan comes second
+#       because the off-by-one buffer handling is the likeliest bug class
+#     - cmplogat, cmplog2: the seed bytes and the case-insensitive
+#       section/key compares; two RedQueen levels
+#     - enum, lookup: TC=test_enumerate / TC=test_lookup_lines only, so the
+#       getsection/getkey index loops and the raw-line lookups get a whole
+#       lane each; same input format, so their queues sync
+#     - asan2: a second ASAN lane on another schedule - small-buffer edge
+#       cases need the seed and the text to line up, and only ASAN sees them
+#     - laf: split compares; minIni mostly branches on single bytes, so it is
+#       the first lane to cut
+#     - lsan: minIni does not allocate, so leaks can only come from the
+#       harness; last, keep it as a sanity lane
+#     - the rest: one lane per power schedule / strategy, with SAND oracles
+#
+# Order matters when JOBS < 16: the first lanes are kept.
+# Line format and tokens: lib/run.sh. Every lane but main also gets -S <name> -z.
+#
+# name       | variant | afl-fuzz args                                                         | env
+
+main         | fast    | -x DICT -w ASAN_ORACLE -w MSAN_ORACLE                                 | AFL_FINAL_SYNC=1
+asan         | asan    | -P explore -x DICT -t TIMEOUT_SAN                                     |
+cmplogat     | fast    | -c CMPLOG -l 2AT -x DICT -a FMT -w ASAN_ORACLE                        | AFL_CMPLOG_ONLY_NEW=1
+enum         | fast    | -p explore -x DICT -a FMT -w ASAN_ORACLE -w MSAN_ORACLE               | TC=test_enumerate AFL_DISABLE_TRIM=1
+lookup       | fast    | -p explore -x DICT -a FMT -w ASAN_ORACLE -w MSAN_ORACLE               | TC=test_lookup_lines AFL_DISABLE_TRIM=1
+explore      | fast    | -p explore -P explore -x DICT -a FMT -w ASAN_ORACLE -w MSAN_ORACLE    | AFL_DISABLE_TRIM=1
+exploit      | fast    | -p exploit -P exploit -Z -x DICT -a FMT -w ASAN_ORACLE                | AFL_DISABLE_TRIM=1
+asan2        | asan    | -p fast -P exploit -x DICT -a FMT -t TIMEOUT_SAN                      |
+cmplog2      | fast    | -c CMPLOG -l 2 -x DICT -w ASAN_ORACLE                                 | AFL_CMPLOG_ONLY_NEW=1
+nodict       | fast    | -p fast -P explore -a FMT -w ASAN_ORACLE                              | AFL_DISABLE_TRIM=1
+rare         | fast    | -p rare -x DICT -a FMT -w ASAN_ORACLE                                 |
+mopt         | fast    | -L 0 -p coe -x DICT -w ASAN_ORACLE -w MSAN_ORACLE                     |
+quad         | fast    | -p quad -P exploit -x DICT -a FMT -w ASAN_ORACLE -w MSAN_ORACLE       | AFL_DISABLE_TRIM=1
+laf          | laf     | -x DICT -a FMT -w ASAN_ORACLE                                         |
+seek         | fast    | -p seek -a FMT -w ASAN_ORACLE                                         | AFL_DISABLE_TRIM=1
+lsan         | lsan    | -P explore -x DICT -t TIMEOUT_SAN                                     |
